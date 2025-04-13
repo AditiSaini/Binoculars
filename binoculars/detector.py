@@ -3,13 +3,13 @@ from typing import Union
 import os
 import numpy as np
 import torch
-import transformers
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, BatchEncoding
 
 from .utils import assert_tokenizer_consistency
 from .metrics import perplexity, entropy
 
 torch.set_grad_enabled(False)
+torch.cuda.empty_cache()
 
 huggingface_config = {
     # Only required for private models from Huggingface (e.g. LLaMA models)
@@ -23,11 +23,12 @@ BINOCULARS_FPR_THRESHOLD = 0.8536432310785527  # optimized for low-fpr [chosen a
 DEVICE_1 = "cuda:0" if torch.cuda.is_available() else "cpu"
 DEVICE_2 = "cuda:1" if torch.cuda.device_count() > 1 else DEVICE_1
 
+print(DEVICE_1, DEVICE_2)
 
 class Binoculars(object):
     def __init__(self,
-                 observer_name_or_path: str = "tiiuae/falcon-7b",
-                 performer_name_or_path: str = "tiiuae/falcon-7b-instruct",
+                 observer_name_or_path: str = "tiiuae/falcon-7b",  #tiiuae/falcon-7b
+                 performer_name_or_path: str = "tiiuae/falcon-7b-instruct",  #tiiuae/falcon-7b-instruct
                  use_bfloat16: bool = True,
                  max_token_observed: int = 512,
                  mode: str = "low-fpr",
@@ -47,7 +48,8 @@ class Binoculars(object):
                                                                     trust_remote_code=True,
                                                                     torch_dtype=torch.bfloat16 if use_bfloat16
                                                                     else torch.float32,
-                                                                    token=huggingface_config["TOKEN"]
+                                                                    token=huggingface_config["TOKEN"],
+                                                                    use_safetensors=False
                                                                     )
         self.observer_model.eval()
         self.performer_model.eval()
@@ -65,7 +67,7 @@ class Binoculars(object):
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    def _tokenize(self, batch: list[str]) -> transformers.BatchEncoding:
+    def _tokenize(self, batch: list[str]) -> BatchEncoding:
         batch_size = len(batch)
         encodings = self.tokenizer(
             batch,
@@ -77,7 +79,7 @@ class Binoculars(object):
         return encodings
 
     @torch.inference_mode()
-    def _get_logits(self, encodings: transformers.BatchEncoding) -> torch.Tensor:
+    def _get_logits(self, encodings: BatchEncoding) -> torch.Tensor:
         observer_logits = self.observer_model(**encodings.to(DEVICE_1)).logits
         performer_logits = self.performer_model(**encodings.to(DEVICE_2)).logits
         if DEVICE_1 != "cpu":
